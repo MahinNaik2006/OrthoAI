@@ -1,0 +1,5 @@
+image,label,split,region,patient_id
+data/train/RibFrac1-image.nii.gz,data/train/RibFrac1-label.nii.gz,train,rib,RibFrac1
+data/validation/RibFrac421-image.nii.gz,data/validation/RibFrac421-label.nii.gz,validation,rib,RibFrac421
+data/train/shoulder-case-001-image.nii.gz,data/train/shoulder-case-001-label.nii.gz,train,shoulder,shoulder-case-001
+data/validation/shoulder-case-101-image.nii.gz,data/validation/shoulder-case-101-label.nii.gz,validation,shoulder,shoulder-case-101

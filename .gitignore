@@ -1,0 +1,50 @@
+# Secrets and local environment configuration
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local medical data and generated model artifacts
+backend/uploads/
+backend/app/uploads/
+backend/data/
+backend/app/data/
+backend/models/
+backend/app/models/
+backend/temp/
+backend/app/temp/
+*.nii
+*.nii.gz
+*.dcm
+*.dicom
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npz
+*.npy
+*.sqlite
+*.sqlite3
+*.db
+
+# Frontend dependencies and build outputs
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/coverage/
+frontend/*.local
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
