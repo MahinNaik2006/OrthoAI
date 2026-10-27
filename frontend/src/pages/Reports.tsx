@@ -1,27 +1,54 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   AlertCircle,
   AlertTriangle,
   BadgeCheck,
   BrainCircuit,
+  CheckCircle2,
   Database,
   FileText,
   LoaderCircle,
   LockKeyhole,
   RefreshCw,
+  Send,
   Sparkles,
+  Stethoscope,
   UploadCloud,
 } from 'lucide-react';
 import {
+  chatWithPatientReports,
   ingestPatientReport,
   listReports,
   runPatientPreoperativeReview,
   type IngestedReport,
   type PatientPreoperativeReview,
+  type ReportChatSource,
 } from '../services/api';
 
+type ReportsLocationState = {
+  patientId?: string;
+};
+
+type ChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sources?: ReportChatSource[];
+};
+
+const REPORT_CHAT_SUGGESTIONS = [
+  'What medications is this patient taking?',
+  'Does the patient have any allergies?',
+  'Summarize the medical and surgical history.',
+  'Are there any bleeding or anesthesia risks?',
+  'What pre-op information is missing?',
+];
+
 export function ReportAnalysisPage() {
-  const [patientId, setPatientId] = useState('DEMO-042');
+  const location = useLocation();
+  const linkedPatientId = (location.state as ReportsLocationState | null)?.patientId;
+  const [patientId, setPatientId] = useState(linkedPatientId ?? 'DEMO-042');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [reports, setReports] = useState<IngestedReport[]>([]);
   const [review, setReview] = useState<PatientPreoperativeReview | null>(null);
@@ -30,6 +57,11 @@ export function ReportAnalysisPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatQuestion, setChatQuestion] = useState('');
+  const [chatting, setChatting] = useState(false);
+  const [chatError, setChatError] = useState('');
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
   const patientHasSearchableReports = reports.some(
     (report) => report.patient_id === patientId.trim() && report.embedding_status === 'ready',
   );
@@ -42,6 +74,8 @@ export function ReportAnalysisPage() {
   const changePatientId = (value: string) => {
     setPatientId(value);
     setReview(null);
+    setChatMessages([]);
+    setChatError('');
   };
 
   useEffect(() => {
@@ -49,6 +83,10 @@ export function ReportAnalysisPage() {
       .catch((requestError: Error) => setError(requestError.message))
       .finally(() => setLoading(false));
   }, [refreshReports]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [chatMessages, chatting]);
 
   const onUpload = async () => {
     if (!selectedFile || !patientId.trim()) return;
@@ -84,6 +122,39 @@ export function ReportAnalysisPage() {
     } finally {
       setAnalyzing(false);
     }
+  };
+
+  const askQuestion = async (question: string) => {
+    const trimmed = question.trim();
+    if (!trimmed || chatting || !patientHasSearchableReports || !patientId.trim()) return;
+    setChatError('');
+    setChatting(true);
+    setChatMessages((messages) => [
+      ...messages,
+      { id: crypto.randomUUID(), role: 'user', content: trimmed },
+    ]);
+    setChatQuestion('');
+    try {
+      const result = await chatWithPatientReports(patientId.trim(), trimmed);
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: result.answer,
+          sources: result.sources,
+        },
+      ]);
+    } catch (requestError) {
+      setChatError(requestError instanceof Error ? requestError.message : 'The report assistant could not answer.');
+    } finally {
+      setChatting(false);
+    }
+  };
+
+  const onChatSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void askQuestion(chatQuestion);
   };
 
   const onFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,6 +195,13 @@ export function ReportAnalysisPage() {
         </button>
       </div>
 
+      {linkedPatientId ? (
+        <div className="imaging-source-note reports-linked-note">
+          <div><CheckCircle2 size={16} /><span>Linked from imaging · patient {linkedPatientId}</span></div>
+          <span>Ingest this patient&rsquo;s reports, then ask questions about them below.</span>
+        </div>
+      ) : null}
+
       <section className="panel report-ingest-card">
         <div className="report-ingest-copy">
           <div className="ingestion-mark"><Database size={20} /></div>
@@ -155,6 +233,96 @@ export function ReportAnalysisPage() {
         {error ? <div className="ingestion-alert error" role="alert"><AlertCircle size={16} />{error}</div> : null}
         {notice ? <div className="ingestion-alert success" role="status"><BadgeCheck size={16} />{notice}</div> : null}
         <div className="reports-local-note"><LockKeyhole size={14} /> Files and report content remain in local MySQL. Embeddings and Llama inference use local Ollama.</div>
+      </section>
+
+      <section className="panel report-chat-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow"><BrainCircuit size={14} /> Local RAG · patient reports</p>
+            <h3>Ask the reports</h3>
+            <p className="panel-subtitle">Answers use only this patient&rsquo;s indexed report excerpts through local Ollama.</p>
+          </div>
+          <span className={`chip ${patientHasSearchableReports ? 'success' : 'neutral'}`}>
+            {patientHasSearchableReports ? 'Search index ready' : 'Ingest reports first'}
+          </span>
+        </div>
+
+        {!patientHasSearchableReports ? (
+          <div className="report-chat-empty">
+            <LockKeyhole size={18} />
+            <p>
+              No searchable reports for <strong>{patientId.trim() || 'this patient'}</strong>. Ingest a PDF, DOCX, or TXT report above to enable questions.
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="report-chat-log" aria-live="polite">
+              {chatMessages.length ? (
+                chatMessages.map((message) => (
+                  <div key={message.id} className={`report-chat-message ${message.role}`}>
+                    <span className="report-chat-avatar">
+                      {message.role === 'user' ? <Stethoscope size={16} /> : <BrainCircuit size={16} />}
+                    </span>
+                    <div className="report-chat-bubble">
+                      <p>{message.content}</p>
+                      {message.sources?.length ? (
+                        <div className="report-chat-sources">
+                          <span className="report-chat-sources-label"><Database size={12} /> Sources</span>
+                          {message.sources.map((source, index) => (
+                            <span key={`${source.filename}-${index}`} title={source.excerpt}>
+                              {source.filename} · {(source.similarity * 100).toFixed(0)}%
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="report-chat-welcome">
+                  <Sparkles size={18} />
+                  <div>
+                    <strong>Ask about this patient&rsquo;s history</strong>
+                    <p>Try a suggested question below, or ask about medications, allergies, prior surgery, or missing pre-op information.</p>
+                  </div>
+                </div>
+              )}
+              {chatting ? (
+                <div className="report-chat-typing">
+                  <LoaderCircle className="spin" size={15} /> Searching reports and composing an answer…
+                </div>
+              ) : null}
+              <div ref={chatEndRef} />
+            </div>
+
+            {chatError ? <div className="ingestion-alert error" role="alert"><AlertCircle size={16} />{chatError}</div> : null}
+
+            <div className="report-chat-suggestions">
+              {REPORT_CHAT_SUGGESTIONS.map((suggestion) => (
+                <button type="button" key={suggestion} onClick={() => void askQuestion(suggestion)} disabled={chatting}>
+                  {suggestion}
+                </button>
+              ))}
+            </div>
+
+            <form className="report-chat-input" onSubmit={onChatSubmit}>
+              <input
+                value={chatQuestion}
+                onChange={(event) => setChatQuestion(event.target.value)}
+                placeholder="Ask about medications, allergies, prior surgery, labs…"
+                maxLength={500}
+                disabled={chatting}
+                aria-label="Question about this patient's reports"
+              />
+              <button type="submit" className="primary-button" disabled={chatting || !chatQuestion.trim()}>
+                {chatting ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}
+                Ask
+              </button>
+            </form>
+          </>
+        )}
+
+        <div className="reports-local-note"><LockKeyhole size={14} /> Answers are decision support only, may be incomplete, and require review of the original reports.</div>
       </section>
 
       <section className="panel stored-reports-panel">

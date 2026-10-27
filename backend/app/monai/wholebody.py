@@ -186,7 +186,7 @@ def segment_bone_anatomy(
                 "vertices": vertices,
                 "faces": faces,
             }
-        )
+        )                 
 
     if not raw_parts:
         raise ValueError("MONAI returned no meshable modeled bone labels for this scan.")

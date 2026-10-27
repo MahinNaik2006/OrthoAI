@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import time
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -200,6 +201,8 @@ async def upload_ct(
                     threshold_intensity=surface["threshold_intensity"],
                     vertex_count=surface["vertex_count"],
                     face_count=surface["face_count"],
+                    mesh_center_mm=surface["mesh_center_mm"],
+                    mesh_scale=surface["mesh_scale"],
                 )
             mesh_status = {
                 "status": "ready",
@@ -298,6 +301,7 @@ async def upload_ct(
         "id": case_id,
         "patient_id": safe_patient_id,
         "filename": original_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "analysis": {
             "scan": summary,
             "preprocessing": preprocessing,
@@ -418,6 +422,8 @@ async def get_ct_surface(case_id: str) -> JSONResponse:
                     "parts": parts,
                     "fracture_part": fracture_part,
                     "spacing_mm": float(anatomy["spacing_mm"]),
+                    "mesh_center_mm": anatomy["mesh_center_mm"].reshape(-1).tolist(),
+                    "mesh_scale": float(anatomy["mesh_scale"]),
                     "vertex_count": int(anatomy["vertex_count"]),
                     "face_count": int(anatomy["face_count"]),
                 }
@@ -448,5 +454,11 @@ async def get_ct_surface(case_id: str) -> JSONResponse:
                 "threshold_intensity": float(surface["threshold_intensity"]),
                 "vertex_count": int(surface["vertex_count"]),
                 "face_count": int(surface["face_count"]),
+                "mesh_center_mm": (
+                    surface["mesh_center_mm"].reshape(-1).tolist()
+                    if "mesh_center_mm" in surface
+                    else None
+                ),
+                "mesh_scale": float(surface["mesh_scale"]) if "mesh_scale" in surface else None,
             }
         )

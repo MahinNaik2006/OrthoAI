@@ -1,26 +1,96 @@
 const API_BASE = 'http://localhost:8000';
 
 export type DashboardData = {
-  data_mode: 'demo';
-  total_cases: number;
-  cases_analyzed: number;
-  fractures_detected: number;
-  reports_analyzed: number;
-  pending_reviews: number;
-  high_priority_findings: number;
-  average_processing_time: string;
-  cases_over_time: { month: string; cases: number }[];
-  fracture_distribution: { name: string; count: number }[];
-  review_queue: { label: string; count: number; level: 'Review' | 'High priority' | 'Missing' }[];
-  recent_cases: {
-    id: string;
-    region: string;
-    study: string;
-    updated: string;
-    status: 'Complete' | 'Review required' | 'Processing';
+  generated_at: string;
+  cases: {
+    total: number;
+    fracture_candidates: number;
+    anatomy_ready: number;
+    fracture_statuses: { name: string; count: number }[];
+    anatomy_statuses: { name: string; count: number }[];
+    mesh_statuses: { name: string; count: number }[];
+    regions: { name: string; count: number }[];
+    processing_time_ms: {
+      sample_count: number;
+      average: number | null;
+      minimum: number | null;
+      maximum: number | null;
+    };
+    metadata: {
+      with_scan_dimensions: number;
+      with_voxel_spacing: number;
+      with_upload_time: number;
+      without_upload_time: number;
+      unassigned_patient: number;
+    };
+    recent: {
+      id: string;
+      created_at: string | null;
+      region: string;
+      slice_count: number | null;
+      scan_dimensions: number[];
+      voxel_spacing: number[];
+      processing_time_ms: number | null;
+      fracture_status: string;
+      anatomy_status: string;
+      mesh_status: string;
+    }[];
+  };
+  reports: {
+    available: boolean;
+    count: number | null;
+    embedding_ready: number | null;
+    embedding_failed: number | null;
+    embedding_pending: number | null;
+    latest_created_at: string | null;
+    error: string | null;
+  };
+  services: {
+    ollama_available: boolean;
+    report_database_available: boolean;
+  };
+  models: {
+    name: string;
+    version: string;
+    supported_anatomy: string;
+    supported_modality: string;
+    training_dataset: string;
+    checkpoint: string;
+    model_card: string;
+    license: string;
+    status: string;
   }[];
-  model_status: { name: string; status: string; detail: string }[];
+  counts_include_legacy_records: boolean;
+  clinical_notice: string;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isDashboardData(value: unknown): value is DashboardData {
+  if (!isRecord(value) || !isRecord(value.cases) || !isRecord(value.reports) || !isRecord(value.services)) {
+    return false;
+  }
+  const cases = value.cases;
+  return (
+    typeof value.generated_at === 'string' &&
+    typeof cases.total === 'number' &&
+    typeof cases.fracture_candidates === 'number' &&
+    typeof cases.anatomy_ready === 'number' &&
+    Array.isArray(cases.fracture_statuses) &&
+    Array.isArray(cases.anatomy_statuses) &&
+    Array.isArray(cases.mesh_statuses) &&
+    Array.isArray(cases.regions) &&
+    Array.isArray(cases.recent) &&
+    isRecord(cases.processing_time_ms) &&
+    isRecord(cases.metadata) &&
+    typeof value.reports.available === 'boolean' &&
+    typeof value.services.ollama_available === 'boolean' &&
+    Array.isArray(value.models) &&
+    typeof value.clinical_notice === 'string'
+  );
+}
 
 export type FractureRegion = 'rib' | 'shoulder';
 
@@ -33,7 +103,11 @@ export async function fetchDashboard(): Promise<DashboardData> {
   if (!response.ok) {
     throw new Error(`Dashboard request failed with status ${response.status}`);
   }
-  return response.json() as Promise<DashboardData>;
+  const data: unknown = await response.json();
+  if (!isDashboardData(data)) {
+    throw new Error('Dashboard API returned an incompatible response. Restart the local backend to load live workspace data.');
+  }
+  return data;
 }
 
 export type CTStudy = {
@@ -122,12 +196,16 @@ export type CTSurface =
   threshold_intensity: number;
   vertex_count: number;
   face_count: number;
+  mesh_scale: number | null;
+  mesh_center_mm?: number[] | null;
   }
   | {
   source: 'monai_anatomy_segmentation';
   parts: CTSurfacePart[];
   fracture_part?: CTSurfacePart | null;
   spacing_mm: number;
+  mesh_scale: number | null;
+  mesh_center_mm?: number[] | null;
   vertex_count: number;
   face_count: number;
   };
@@ -262,6 +340,35 @@ export async function runPatientPreoperativeReview(patientId: string) {
   return reportRequest<PatientPreoperativeReview>(
     `${API_BASE}/api/patients/${encodeURIComponent(patientId)}/preoperative-review`,
     { method: 'POST' },
+  );
+}
+
+export type ReportChatSource = {
+  filename: string;
+  similarity: number;
+  excerpt: string;
+};
+
+export type ReportChatResponse = {
+  status: string;
+  patient_id: string;
+  model: string;
+  embedding_model: string;
+  question: string;
+  answer: string;
+  reports_included: number;
+  sources: ReportChatSource[];
+  disclaimer: string;
+};
+
+export async function chatWithPatientReports(patientId: string, question: string) {
+  return reportRequest<ReportChatResponse>(
+    `${API_BASE}/api/patients/${encodeURIComponent(patientId)}/report-chat`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    },
   );
 }
 

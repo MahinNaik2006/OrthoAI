@@ -293,6 +293,43 @@ def list_reports(patient_id: str | None = None, limit: int = 100) -> list[dict[s
     return rows
 
 
+def get_report_dashboard_summary() -> dict[str, Any]:
+    try:
+        _ensure_schema()
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS total_count,
+                           COALESCE(SUM(embedding_status = 'ready'), 0) AS embedding_ready,
+                           COALESCE(SUM(embedding_status = 'failed'), 0) AS embedding_failed,
+                           COALESCE(SUM(embedding_status NOT IN ('ready', 'failed')), 0) AS embedding_pending,
+                           MAX(created_at) AS latest_created_at
+                    FROM medical_reports
+                    """
+                )
+                row = cursor.fetchone()
+    except (pymysql.MySQLError, ReportDatabaseError) as exc:
+        if isinstance(exc, ReportDatabaseError):
+            raise
+        raise _database_error(exc) from exc
+
+    if row is None:
+        raise ReportDatabaseError("The report summary query returned no result.")
+    latest_created_at = row["latest_created_at"]
+    return {
+        "count": int(row["total_count"]),
+        "embedding_ready": int(row["embedding_ready"]),
+        "embedding_failed": int(row["embedding_failed"]),
+        "embedding_pending": int(row["embedding_pending"]),
+        "latest_created_at": (
+            latest_created_at.replace(tzinfo=timezone.utc).isoformat()
+            if latest_created_at
+            else None
+        ),
+    }
+
+
 def retrieve_relevant_chunks(
     *,
     patient_id: str,

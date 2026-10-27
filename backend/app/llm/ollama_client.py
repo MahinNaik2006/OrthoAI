@@ -95,6 +95,53 @@ def analyze_preoperative_context(context_chunks: list[dict[str, Any]]) -> dict[s
         raise RuntimeError("The local model returned invalid structured report analysis.") from exc
 
 
+def answer_report_question(question: str, context_chunks: list[dict[str, Any]]) -> str:
+    evidence = "\n\n".join(
+        f"[{chunk['filename']} · relevant report excerpt]\n{chunk['content']}"
+        for chunk in context_chunks
+    )
+    if not evidence:
+        raise ValueError("There are no ingested report excerpts to answer from.")
+
+    payload = {
+        "model": MODEL_NAME,
+        "stream": False,
+        "options": {"temperature": 0},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a local clinical decision-support assistant for an orthopedic team. "
+                    "Answer the clinician's question using only the supplied patient report excerpts. "
+                    "Cite the source filename in brackets when stating a fact. If the excerpts do not "
+                    "contain the answer, say that the information is not present in the ingested reports "
+                    "and note what should be verified. Do not diagnose, invent facts, recommend surgery, "
+                    "or clear a patient for surgery. Keep the answer concise and clinically neutral."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Patient report excerpts:\n{evidence[:12000]}\n\n"
+                    f"Clinician question: {question}"
+                ),
+            },
+        ],
+    }
+    try:
+        response = requests.post(f"{OLLAMA_URL}/api/chat", json=payload, timeout=90)
+        response.raise_for_status()
+        answer = response.json().get("message", {}).get("content", "").strip()
+        if not answer:
+            raise RuntimeError("The local model returned an empty answer.")
+        return answer
+    except requests.RequestException as exc:
+        raise RuntimeError(
+            f"Could not answer from reports with local Ollama model {MODEL_NAME}. "
+            "Check that Ollama is running and the model is installed."
+        ) from exc
+
+
 def ollama_available() -> bool:
     try:
         requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)

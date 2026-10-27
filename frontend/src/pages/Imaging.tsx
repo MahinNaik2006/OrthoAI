@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, CheckCircle2, FileImage, ScanLine, ShieldAlert } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { AlertTriangle, ArrowRight, Box, CheckCircle2, FileImage, FileText, Layers3, ScanLine, ShieldAlert } from 'lucide-react';
 import { CTSurfaceViewer } from '../components/CTSurfaceViewer';
 import { CTSliceViewer } from '../components/CTSliceViewer';
+import { ImagingScanner } from '../components/ImagingScanner';
 import { fetchCTSurface, uploadCT, type CTSurface, type CTStudy, type FractureRegion } from '../services/api';
 
 type ImagingLocationState = {
@@ -14,6 +15,7 @@ type ImagingLocationState = {
 
 export function ImagingPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const initialState = location.state as ImagingLocationState | null;
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [result, setResult] = useState<CTStudy | null>(initialState?.ctStudy ?? null);
@@ -22,6 +24,7 @@ export function ImagingPage() {
     initialState?.ctStudy?.analysis.fracture.target_region ?? initialState?.targetRegion ?? 'shoulder',
   );
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [error, setError] = useState('');
   const [uploadNotice, setUploadNotice] = useState(initialState?.notice ?? '');
   const [surface, setSurface] = useState<CTSurface | null>(null);
@@ -50,9 +53,7 @@ export function ImagingPage() {
     };
   }, [caseId, surfaceStatus]);
 
-  const onUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  const processFile = async (file: File) => {
     if (!/\.nii(\.gz)?$/i.test(file.name)) {
       setError('Upload one NIfTI volume (.nii or .nii.gz). DICOM series ingestion is not enabled yet.');
       return;
@@ -73,36 +74,69 @@ export function ImagingPage() {
     }
   };
 
+  const onUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) void processFile(file);
+  };
+
+  const onDrop = (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    setDragging(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) void processFile(file);
+  };
+
   return (
     <div className="page-shell imaging-page">
-      <div className="page-header">
-        <div>
-          <p className="eyebrow">Imaging Analysis · Patient {result?.patient_id ?? patientId}</p>
+      <section className="imaging-hero">
+        <div className="imaging-hero-copy">
+          <p className="eyebrow">Imaging analysis · Patient {result?.patient_id ?? patientId}</p>
           <h1>CT slices &amp; fracture candidates</h1>
-          <p className="dashboard-subtitle">Review scan anatomy and unverified candidate regions from a trained fracture CNN when available.</p>
+          <p className="dashboard-subtitle">
+            Move from raw slices to labeled anatomy and an interactive 3D surface. Fracture outputs stay experimental and require expert review.
+          </p>
+          <div className="imaging-hero-tags">
+            <span><Layers3 size={14} /> Labeled slices</span>
+            <span><Box size={14} /> 3D anatomy</span>
+            <span><ScanLine size={14} /> NIfTI ingest</span>
+          </div>
+          <div className="ct-upload-actions">
+            <label className="ct-region-select">
+              <span>Fracture region</span>
+              <select value={targetRegion} onChange={(event) => setTargetRegion(event.target.value === 'rib' ? 'rib' : 'shoulder')}>
+                <option value="shoulder">Shoulder girdle</option>
+                <option value="rib">Rib cage</option>
+              </select>
+            </label>
+            <label className="upload-button">
+              <input type="file" accept=".nii,.nii.gz" onChange={onUpload} />
+              <ScanLine size={16} /> Upload NIfTI CT
+            </label>
+          </div>
         </div>
-        <div className="ct-upload-actions">
-          <label className="ct-region-select">
-            <span>Fracture region</span>
-            <select value={targetRegion} onChange={(event) => setTargetRegion(event.target.value === 'rib' ? 'rib' : 'shoulder')}>
-              <option value="shoulder">Shoulder girdle</option>
-              <option value="rib">Rib cage</option>
-            </select>
-          </label>
-          <label className="upload-button">
-            <input type="file" accept=".nii,.nii.gz" onChange={onUpload} />
-            <ScanLine size={16} /> Upload NIfTI CT
-          </label>
-        </div>
-      </div>
+        <ImagingScanner />
+      </section>
 
       {!result ? (
         <div className="panel upload-panel">
-          <div className="upload-dropzone">
-            <FileImage size={28} />
-            <h3>{selectedFile ? selectedFile.name : 'Upload a CT volume to begin'}</h3>
-            <p>Supports a single NIfTI file (.nii or .nii.gz), up to 512 MB.</p>
-          </div>
+          <label
+            className={`upload-dropzone imaging-dropzone ${dragging ? 'is-dragging' : ''}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+          >
+            <input type="file" accept=".nii,.nii.gz" onChange={onUpload} />
+            <span className="imaging-dropzone-icon"><FileImage size={30} /></span>
+            <h3>{selectedFile ? selectedFile.name : 'Drop a CT volume here'}</h3>
+            <p>or click to browse · NIfTI (.nii / .nii.gz) up to 512 MB</p>
+            <span className="imaging-dropzone-hint">
+              {dragging ? 'Release to start the anatomy pipeline' : 'MONAI anatomy · slice labels · 3D surface'}
+            </span>
+          </label>
           {busy ? (
             <div className="progress-list">
               {['Uploading CT', 'Reading NIfTI metadata', 'Running MONAI anatomy segmentation', 'Creating colored 3D anatomy surfaces'].map((step, index) => (
@@ -203,7 +237,7 @@ export function ImagingPage() {
             <p>Drag to rotate · right-drag to pan · scroll to zoom.</p>
           </div>
           {surface ? (
-            <CTSurfaceViewer surface={surface} />
+            <CTSurfaceViewer key={result.id} surface={surface} />
           ) : (
             <div className="panel ct-surface-status" role={surfaceError ? 'alert' : undefined}>
               <ShieldAlert size={18} />
@@ -214,6 +248,22 @@ export function ImagingPage() {
               </p>
             </div>
           )}
+
+          <section className="panel imaging-next-step">
+            <div className="imaging-next-step-mark"><FileText size={20} /></div>
+            <div className="imaging-next-step-copy">
+              <p className="eyebrow">Next step · patient {result.patient_id}</p>
+              <h3>Add this patient&rsquo;s reports</h3>
+              <p>Ingest clinical documents, then ask the local RAG assistant about medications, allergies, prior surgery, and pre-op risks.</p>
+            </div>
+            <button
+              type="button"
+              className="primary-button imaging-next-step-button"
+              onClick={() => navigate('/reports', { state: { patientId: result.patient_id } })}
+            >
+              <FileText size={16} /> Ingest reports <ArrowRight size={16} />
+            </button>
+          </section>
         </>
       )}
 

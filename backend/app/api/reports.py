@@ -6,12 +6,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 import fitz
 
-from app.core.config import EMBEDDING_MODEL_NAME, TEMP_DIR
+from app.core.config import EMBEDDING_MODEL_NAME, MODEL_NAME, TEMP_DIR
 from app.llm.ollama_client import (
     analyze_preoperative_context,
     analyze_report_text,
+    answer_report_question,
     create_embeddings,
 )
 from app.reports.mysql_store import (
@@ -29,6 +31,10 @@ router = APIRouter(prefix="/api", tags=["reports"])
 MAX_REPORT_BYTES = 15 * 1024 * 1024
 logger = logging.getLogger("ortho_ai.reports")
 ALLOWED_INGESTION_FORMATS = {".txt", ".pdf", ".docx"}
+
+
+class ReportQuestion(BaseModel):
+    question: str = Field(min_length=3, max_length=500)
 
 
 def _validate_patient_id(patient_id: str) -> str:
@@ -208,6 +214,72 @@ async def preoperative_review(patient_id: str) -> dict:
         ],
         "analysis": analysis,
         "disclaimer": "Decision support only. A qualified clinician must review the source reports and findings; this is not surgical clearance.",
+    }
+
+
+@router.post("/patients/{patient_id}/report-chat")
+async def report_chat(patient_id: str, payload: ReportQuestion) -> dict:
+    _validate_patient_id(patient_id)
+    question = payload.question.strip()
+    if len(question) < 3:
+        raise HTTPException(status_code=422, detail="Question is too short.")
+
+    try:
+        reports = list_reports(patient_id=patient_id)
+    except ReportDatabaseError as exc:
+        raise _database_http_error(exc) from exc
+    if not reports:
+        raise HTTPException(status_code=404, detail="No reports have been ingested for this patient.")
+
+    try:
+        query_embedding = create_embeddings([question])[0]
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    try:
+        relevant_chunks = retrieve_relevant_chunks(
+            patient_id=patient_id,
+            query_embedding=query_embedding,
+            embedding_model=EMBEDDING_MODEL_NAME,
+            limit=6,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ReportDatabaseError as exc:
+        raise _database_http_error(exc) from exc
+    if not relevant_chunks:
+        raise HTTPException(
+            status_code=409,
+            detail="No compatible report vectors were found. Re-ingest reports with the configured local embedding model.",
+        )
+
+    try:
+        answer = answer_report_question(question, relevant_chunks)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "status": "answered",
+        "patient_id": patient_id,
+        "model": MODEL_NAME,
+        "embedding_model": EMBEDDING_MODEL_NAME,
+        "question": question,
+        "answer": answer,
+        "reports_included": len(reports),
+        "sources": [
+            {
+                "filename": chunk["filename"],
+                "similarity": round(float(chunk["similarity"]), 3),
+                "excerpt": chunk["content"][:280],
+            }
+            for chunk in relevant_chunks
+        ],
+        "disclaimer": (
+            "Decision support only. Answers are derived from ingested report excerpts and may be "
+            "incomplete. A qualified clinician must verify the original reports; this is not surgical clearance."
+        ),
     }
 
 
